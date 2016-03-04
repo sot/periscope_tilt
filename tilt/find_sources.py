@@ -29,7 +29,7 @@ sqlaca = DBI(dbi='sybase', user='aca_read')
 
 #XRAY_DATA = '/data/aca/archive/xray_for_periscope'
 projdir = '/proj/sot/ska/analysis/periscope_tilt_2016'
-XRAY_DATA = os.path.join(projdir, '')
+XRAY_DATA = os.path.join(projdir, 'auto')
 ciao_env = getenv("source /soft/ciao/bin/ciao.csh", shell='tcsh')
 
 
