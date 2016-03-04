@@ -15,6 +15,7 @@ from astropy.io import fits
 from Ska.Numpy import smooth, interpolate
 from Ska.Shell import bash, tcsh_shell, getenv
 from Ska.DBI import DBI
+from Ska.engarchive import fetch
 import Quaternion
 import Ska.quatutil
 
@@ -208,12 +209,17 @@ def extract_point(obs_info, src, obsdir, point):
         os.unlink(evt2)
 
 
-def get_xray_data():
+def get_xray_data(obsids=None):
 
-    obsid_query = "select obsid from obs_periscope_tilt where max_oobagrd3 - min_oobagrd3 > .125 order by (max_oobagrd3 - min_oobagrd3) desc"
-    obsids = sqlaca.fetchall(obsid_query)['obsid']
-    print "Fetching obsids using query '{}'".format(obsid_query)
-    print "Looking for sources in these {} observations".format(len(obsids))
+    if obsids is None:
+        obsid_query = "select obsid from obs_periscope_tilt where max_oobagrd3 - min_oobagrd3 > .09 order by (max_oobagrd3 - min_oobagrd3) desc"
+        obsids = sqlaca.fetchall(obsid_query)['obsid']
+        print "Fetching obsids using query '{}'".format(obsid_query)
+        print "Looking for sources in these {} observations".format(len(obsids))
+    else:
+        print "Fetching specified obsids"
+        print obsids
+
     for obsid in obsids:
 
         obsdir = "%s/auto/obs%05d" % (projdir, obsid)
@@ -268,9 +274,8 @@ def get_xray_data():
                 time=np.array(evts['time']),
                 yag=np.array(y * 3600),
                 zag=np.array(z * 3600))
-
             pos_pick = open(os.path.join(obsdir, 'released_pos.pkl'), 'w')
-            cPickle.dump( pos, pos_pick)
+            cPickle.dump(pos, pos_pick)
             pos_pick.close()
 
 
