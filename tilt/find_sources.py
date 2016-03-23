@@ -23,7 +23,7 @@ import Ska.quatutil
 
 
 REDO = False
-
+MTIME = 1457707041.222744
 sqlaca = DBI(dbi='sybase', user='aca_read')
 
 
@@ -97,6 +97,12 @@ def find_obsid_src(obsid, obs):
     if obs['readmode'] == 'CONTINUOUS':
         return None
 
+    if obs['obs_mode'] == 'SECONDARY':
+        return None
+
+    if ((obs['instrume'] == 'ACIS') & (obs['detector'] == 'HRC-S')):
+        return None
+
     xray_data = XRAY_DATA
     if not os.path.exists(xray_data):
         os.makedirs(xray_data)
@@ -129,6 +135,8 @@ def find_obsid_src(obsid, obs):
     event_files = glob("%s/*evt2*" % tempdir)
     # Read processing keywords from the evt2 file
     f = fits.open(event_files[0])
+    if 'ASOLFILE' not in f[1].header:
+        return None
     proc_info = {'ASCDSVER': f[1].header['ASCDSVER'],
                  'CALDBVER': f[1].header['CALDBVER'],
                  'REVISION': f[1].header['REVISION'],
@@ -168,7 +176,9 @@ def find_obsid_src(obsid, obs):
             print "no sources in {}".format(event_files[0])
         return src
     else:
-        raise ValueError("No src2 file was made")
+        print("No src2 file was made")
+        return None 
+
 
 
 
@@ -186,15 +196,18 @@ def filter_bad_telem(msid, method='nearest'):
 
 
 def extract_point(obs_info, src, obsdir, point):
+    print "Remaking {}".format(point)
     det = 'acis'
+    radius = 6
     if obs_info['instrume'] == 'HRC':
         det = 'hrc'
-    tempdir = tempfile.mkdtemp()
+        radius = 30
+    tempdir = tempfile.mkdtemp(dir='/export/jeanconn/tempdir/')
     bash('echo "cd %s\n obsid=%d\n get %s2{evt2}\n" | arc5gl -stdin' %
          (tempdir, src['obsid'], det))
     reg = os.path.join(obsdir, 'center.reg')
     c = open(reg, 'w')
-    regstring = "circle(%f, %f, 6)" % (src[0]['X'], src[0]['Y'])
+    regstring = "circle(%f, %f, %d)" % (src[0]['X'], src[0]['Y'], radius)
     c.write("%s\n" % regstring)
     c.close()
     evt2 = glob('%s/*evt2.fits*' % tempdir)[0]
@@ -203,22 +216,13 @@ def extract_point(obs_info, src, obsdir, point):
         dmstring = dmstring +  '[energy=300:7000]'
     #print("/proj/sot/ska/bin/doapp -ciao dmcopy %s'[(x,y)=%s]%s' %s" %
     #      (evt2, regstring, dmstring, point))
-    status = bash("/proj/sot/ska/bin/doapp -ciao dmcopy %s'[(x,y)=%s]%s' %s" %
+    status = bash("/proj/sot/ska/bin/doapp -ciao dmcopy %s'[(x,y)=%s]%s' %s clobber+" %
                   (evt2, regstring, dmstring, point))
     if not status:
         os.unlink(evt2)
 
 
-def get_xray_data(obsids=None):
-
-    if obsids is None:
-        obsid_query = "select obsid from obs_periscope_tilt where max_oobagrd3 - min_oobagrd3 > .09 order by (max_oobagrd3 - min_oobagrd3) desc"
-        obsids = sqlaca.fetchall(obsid_query)['obsid']
-        print "Fetching obsids using query '{}'".format(obsid_query)
-        print "Looking for sources in these {} observations".format(len(obsids))
-    else:
-        print "Fetching specified obsids"
-        print obsids
+def get_xray_data(obsids):
 
     for obsid in obsids:
 
@@ -228,7 +232,9 @@ def get_xray_data(obsids=None):
 
         src_file = os.path.join(obsdir, 'picked_src.dat')
         obs_info = sqlaca.fetchone("select * from observations where obsid = %d" % obsid)
-        if not os.path.exists(src_file) or REDO:
+        if obs_info is None:
+            continue
+        if not os.path.exists(src_file):
             src = find_obsid_src(obsid, obs_info)
             if src is None:
                 continue
@@ -242,7 +248,9 @@ def get_xray_data(obsids=None):
         # cut-out region with a point source for this obsid
         point = '%s/point_source.fits' % obsdir
         #print point
-        if not os.path.exists(point) or REDO:
+        if (not os.path.exists(point)
+            or ((os.stat(point).st_mtime < MTIME) and obs_info['instrume'] == 'HRC')
+            or REDO):
             extract_point(obs_info, src, obsdir, point)
         obsid_src = point
 
@@ -250,7 +258,7 @@ def get_xray_data(obsids=None):
         if not os.path.exists(os.path.join(obsdir, 'tilt.pkl')) or REDO:
             obs = obs_info
             msids=[ 'OOBAGRD3', 'OOBAGRD6', 'OHRTHR42', 'OHRTHR43', 'OOBTHR39', 'OHRTHR24', '4RT702T', 'OHRTHR24', 'AACBPPT', 'AACH1T', 'AACCCDPT', 'AACBPRT']
-            telem = fetch.MSIDset(msids, obs['tstart'], obs['tstop'])
+            telem = fetch.MSIDset(msids, obs['tstart'] - 1000, obs['tstop'] + 1000)
             telemtime = telem['OOBAGRD3'].times
             tilt = dict(telem)
             tilt.update(dict(
@@ -264,11 +272,18 @@ def get_xray_data(obsids=None):
 
 
         # position data
-        if not os.path.exists(os.path.join(obsdir, 'released_pos.pkl')) or REDO:
+        if (not os.path.exists(os.path.join(obsdir, 'released_pos.pkl'))
+            or (os.stat(os.path.join(obsdir, 'released_pos.pkl')).st_mtime < os.stat(point).st_mtime)
+            or REDO):
             obs = obs_info
+            print "making released_pos.pkl for {}".format(obs['obsid'])
+            print obs
             evts = Table.read(obsid_src)
             q = Quaternion.Quat([ obs['ra_nom'], obs['dec_nom'], obs['roll_nom']])
 
+            # only use the first aspect interval of obsid 14457
+            if obsid == 14457:
+                evts = evts[evts['time'] < 490232479.878]
             y, z = Ska.quatutil.radec2yagzag(evts['RA'], evts['DEC'], q)
             pos = dict(
                 time=np.array(evts['time']),
@@ -279,16 +294,59 @@ def get_xray_data(obsids=None):
             pos_pick.close()
 
 
+
+        GRADIENTS = dict(OOBAGRD3=dict(yag=6.98145650e-04,
+                                       zag=9.51578351e-05,
+                                       ),
+                         OOBAGRD6=dict(yag=-1.67009240e-03,
+                                       zag=-2.79084775e-03,
+                                       ))
+
+
+        # position data
+        if (not os.path.exists(os.path.join(obsdir, 'pos.pkl')) 
+            or (os.stat(os.path.join(obsdir, 'pos.pkl')).st_mtime < os.stat(point).st_mtime)
+            or REDO):
+            obs = obs_info
+            print "making pos.pkl for {}".format(obs['obsid'])
+            evts = Table.read(obsid_src)
+            q = Quaternion.Quat([ obs['ra_nom'], obs['dec_nom'], obs['roll_nom']])
+
+            # only use the first aspect interval of obsid 14457
+            if obsid == 14457:
+                evts = evts[evts['time'] < 490232479.878]
+            y, z = Ska.quatutil.radec2yagzag(evts['RA'], evts['DEC'], q)
+            # retrieve gradient telemetry
+            tstart = evts['time'][0]
+            tstop = evts['time'][-1]
+            gradients = fetch.MSIDset(GRADIENTS.keys(), tstart-100, tstop+100)
+            for msid in gradients:
+                # filter bad telemetry in place
+                filter_bad_telem(gradients[msid])
+                times = gradients[msid].times
+                evt_idx = np.searchsorted(times, evts['time'])
+                # find a mean gradient, because this calibration is relative to mean
+                mean_gradient = np.mean(gradients[msid].vals[evt_idx])
+                # and smooth the telemetry to deal with slow changes and large step sizes..
+                smooth_gradient = smooth(gradients[msid].vals)
+                y += (smooth_gradient[evt_idx] - mean_gradient) * GRADIENTS[msid]['yag']
+                z += (smooth_gradient[evt_idx] - mean_gradient) * GRADIENTS[msid]['zag']
+
+            pos = dict(
+                time=np.array(evts['time']),
+                yag=np.array(y * 3600),
+                zag=np.array(z * 3600))
+
+            pos_pick = open(os.path.join(obsdir, 'pos.pkl'), 'w')
+            cPickle.dump( pos, pos_pick)
+            pos_pick.close()
+
+
+
     pos_files = glob("auto/obs*/released_pos.pkl")
     print "Retrieved sources for {} observations".format(len(pos_files))
 
 
-GRADIENTS = dict(OOBAGRD3=dict(yag=6.98145650e-04,
-                               zag=9.51578351e-05,
-                               ),
-                 OOBAGRD6=dict(yag=-1.67009240e-03,
-                               zag=-2.79084775e-03,
-                               ))
 
 
 
@@ -298,38 +356,5 @@ GRADIENTS = dict(OOBAGRD3=dict(yag=6.98145650e-04,
 #    obs_info, src = find_obsid_src(obsid)
 #
 #
-#    # position data
-#    if not os.path.exists(os.path.join(obsdir, 'pos.pkl')) or REDO:
-#        obs = obs_info
-#        evts = Table.read(obsid_src)
-#        import Quaternion
-#        import Ska.quatutil
-#        q = Quaternion.Quat([ obs['ra_nom'], obs['dec_nom'], obs['roll_nom']])
-#
-#        y, z = Ska.quatutil.radec2yagzag(evts['RA'], evts['DEC'], q)
-#        pos = dict(
-#            time=np.array(evts['time']),
-#            yag=np.array(y * 3600),
-#            zag=np.array(z * 3600))
-#
-#        pos_pick = open(os.path.join(obsdir, 'pos.pkl'), 'w')
-#        cPickle.dump( pos, pos_pick)
-#        pos_pick.close()
-#
-#        # retrieve gradient telemetry
-#        tstart = evts['time'][0]
-#        tstop = evts['time'][-1]
-#        gradients = fetch.MSIDset(GRADIENTS.keys(), tstart-100, tstop+100)
-#        for msid in gradients:
-#            # filter bad telemetry in place
-#            filter_bad_telem(gradients[msid])
-#            times = gradients[msid].times
-#            evt_idx = np.searchsorted(times, evts['time'])
-#            # find a mean gradient, because this calibration is relative to mean 
-#            mean_gradient = np.mean(gradients[msid].vals[evt_idx])
-#            # and smooth the telemetry to deal with slow changes and large step sizes..
-#            smooth_gradient = smooth(gradients[msid].vals)
-#            y += (smooth_gradient[evt_idx] - mean_gradient) * GRADIENTS[msid]['yag']
-#            z += (smooth_gradient[evt_idx] - mean_gradient) * GRADIENTS[msid]['zag']
 #
 

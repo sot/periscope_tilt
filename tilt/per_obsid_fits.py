@@ -5,6 +5,14 @@ import numpy as np
 import cPickle
 import re
 
+# Matplotlib setup                                                                                                     
+# Use Agg backend for command-line (non-interactive) operation                                                         
+import matplotlib
+if __name__ == '__main__':
+    matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
+
 import sherpa.ui as ui
 
 from Ska.Numpy import interpolate
@@ -36,8 +44,65 @@ def tilt_model(tilt_data, evt_times, user_pars=None):
     return model
 
 
+def binned_mean(data, evtstime, tbin=5000.):
+    ts = []
+    ds = []
+    dsminus = []
+    dsplus = []
+    for win_start in range(0,
+                           int(evtstime[-1]-evtstime[0])-int(tbin),
+                           int(tbin)):
+        tmask = ((evtstime-evtstime[0] >= win_start)
+                 & (evtstime-evtstime[0] < win_start + int(tbin)))
+        range_data = data[ tmask ]
+        range_time = evtstime[ tmask ]
+        if np.std(range_data) > 0:
+            ds.append(np.mean(range_data))
+            dsminus.append(np.std(range_data)/np.sqrt(len(range_data)))
+            dsplus.append(np.std(range_data)/np.sqrt(len(range_data)))
+            t = np.mean(range_time)
+            ts.append(t)
+    return [ ts, ds, dsminus, dsplus ]
 
-def run_fits(obsids, ax=None, user_pars=None,
+
+
+def plot_fits(ids, posdir=None, outdir='fit'):
+
+    if not os.path.exists(outdir):
+        os.makedirs(outdir)
+
+    for id in ids:
+        obsid = id['obsid']
+        data_id = id['data_id']
+        ax = id['ax']
+        pf = open(os.path.join(posdir, 'pos.pkl'), 'r')
+        pos = cPickle.load(pf)
+        pf.close()
+
+        pos_data = pos[ax]
+
+        fig = plt.figure(figsize=(6,4))
+        axplot = ui.get_model_plot(data_id)
+        plt.plot( axplot.x/1000., axplot.y, 'b.')
+        [ts, ds, dsminus, dsplus] = binned_mean(
+            pos_data-np.mean(pos_data),
+            pos['time']-pos['time'][0] )
+        if not len(ts):
+            continue
+        plt.errorbar((ts-ts[0])/1000., ds,
+                     yerr=dsminus, color='k', marker='.', linestyle='')
+        plt.xlabel('Time (ksec)')
+        plt.ylabel('%s' % ax)
+        plt.subplots_adjust(left=.15)
+        plt.title('Model(Blue), BinMean Pos(Black) (obs=%s)' % (obsid))
+        plt.ylim(-.3,.3)
+        plt.grid()
+        plt.savefig('%s/%s_%s_sfit.png' % (outdir, obsid, ax))
+        plt.close()
+
+
+
+def run_fits(obsids, ax, user_pars=None,
              fixed_pars=None, guess_pars=None, label='model',
              per_obs_dir='per_obs_nfits',
              outdir=None, redo=False):
@@ -45,8 +110,6 @@ def run_fits(obsids, ax=None, user_pars=None,
     if len(obsids) == 0:
         print "No obsids, nothing to fit"
         return None
-    if ax is None:
-        ax = 'yag'
     if user_pars is None:
         user_pars = USER_PARS
 
@@ -151,6 +214,11 @@ def run_fits(obsids, ax=None, user_pars=None,
         mod_pick.close()
 
         obsfits.append(modelfit)
+
+        plot_fits([dict(obsid=obsid, data_id=data_id, ax=ax)],
+                  posdir=obsdir,
+                  outdir=outdir)
+
 
     return obsfits
 
