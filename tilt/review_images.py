@@ -69,7 +69,7 @@ obs_srcs = glob(os.path.join(DATADIR, "obs*/picked_src.dat"))
 srcs = []
 for src_file in obs_srcs:
     src = Table.read(src_file, format='ascii')
-    if src['NET_COUNTS'] < COUNT_LIMIT:
+    if ((src['NET_COUNTS'] < COUNT_LIMIT) and (src['obsid'] != 18276)):
         continue
     src_dir = os.path.dirname(src_file)
     stat_file = os.path.join(src_dir, 'point_stat.dat')

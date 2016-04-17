@@ -11,11 +11,15 @@ from glob import glob
 import re
 
 auto = glob("auto/obs*")
-for dir in auto:
+for dir in auto[::-1]:
     if (os.path.exists(os.path.join(dir, 'center.reg')) and
         os.path.exists(os.path.join(dir, 'point_source.fits'))):
-        if not os.path.exists(os.path.join(dir, 'ds9_src.png')):
-            #print '%s/ds9_src.png' % dir
+        if (not os.path.exists(os.path.join(dir, 'ds9_src.png'))):
+#            ((os.stat(os.path.join(dir, 'ds9_src.png')).st_mtime) < (os.stat(os.path.join(dir, 'point_source.fits')).st_mtime))):
+            print os.path.join(dir, 'point_source.fits')
+            #print os.stat(os.path.join(dir, 'ds9_src.png')).st_mtime
+            #print os.stat(os.path.join(dir, 'point_source.fits')).st_mtime
+            print '%s/ds9_src.png' % dir
             #    bash('display obs%s/ds9_src.png' % ob) 
             regf = open(os.path.join(dir, 'center.reg'),'r')
             reg = regf.read()
